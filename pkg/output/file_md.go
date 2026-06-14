@@ -23,56 +23,8 @@ const (
 func writeMarkdown(filename string, config *ffuf.Config, results []ffuf.Result) error {
 	ti := time.Now()
 
-	keywords := make([]string, 0)
-	for _, inputprovider := range config.InputProviders {
-		keywords = append(keywords, inputprovider.Keyword)
-	}
-
-	htmlResults := make([]htmlResult, 0)
-
-	ffufhash := ""
-	for _, r := range results {
-		strinput := make(map[string]string)
-		for k, v := range r.Input {
-			if k == "FFUFHASH" {
-				ffufhash = string(v)
-			} else {
-				strinput[k] = string(v)
-			}
-		}
-		strscraper := ""
-		for k, v := range r.ScraperData {
-			if len(v) > 0 {
-				strscraper = strscraper + "<p><b>" + k + ":</b><br />"
-				firstval := true
-				for _, val := range v {
-					if !firstval {
-						strscraper += "<br />"
-					}
-					strscraper += val
-					firstval = false
-				}
-				strscraper += "</p>"
-			}
-		}
-		hres := htmlResult{
-			Input:            strinput,
-			Position:         r.Position,
-			StatusCode:       r.StatusCode,
-			ContentLength:    r.ContentLength,
-			ContentWords:     r.ContentWords,
-			ContentLines:     r.ContentLines,
-			ContentType:      r.ContentType,
-			RedirectLocation: r.RedirectLocation,
-			ScraperData:      strscraper,
-			Duration:         r.Duration,
-			ResultFile:       r.ResultFile,
-			Url:              r.Url,
-			Host:             r.Host,
-			FfufHash:         ffufhash,
-		}
-		htmlResults = append(htmlResults, hres)
-	}
+	keywords := GetKeywords(config)
+	htmlResults := ToHtmlResults(results)
 
 	outMD := htmlFileOutput{
 		CommandLine: config.CommandLine,
