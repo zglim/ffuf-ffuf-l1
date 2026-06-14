@@ -16,28 +16,26 @@ import (
 
 const (
 	BANNER_HEADER = `
-        /'___\  /'___\           /'___\       
-       /\ \__/ /\ \__/  __  __  /\ \__/       
-       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\      
-        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/      
-         \ \_\   \ \_\  \ \____/  \ \_\       
-          \/_/    \/_/   \/___/    \/_/       
+        /'___\  /'___\           /'___\
+       /\ \__/ /\ \__/  __  __  /\ \__/
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/
+         \ \_\   \ \_\  \ \____/  \ \_\
+          \/_/    \/_/   \/___/    \/_/
 `
 	BANNER_SEP = "________________________________________________"
 )
 
 type Stdoutput struct {
-	config         *ffuf.Config
-	fuzzkeywords   []string
-	Results        []ffuf.Result
-	CurrentResults []ffuf.Result
+	config       *ffuf.Config
+	fuzzkeywords []string
+	*ResultCollector
 }
 
 func NewStdoutput(conf *ffuf.Config) *Stdoutput {
 	var outp Stdoutput
 	outp.config = conf
-	outp.Results = make([]ffuf.Result, 0)
-	outp.CurrentResults = make([]ffuf.Result, 0)
+	outp.ResultCollector = NewResultCollector()
 	outp.fuzzkeywords = make([]string, 0)
 	for _, ip := range conf.InputProviders {
 		outp.fuzzkeywords = append(outp.fuzzkeywords, ip.Keyword)
@@ -140,27 +138,6 @@ func (s *Stdoutput) Banner() {
 	fmt.Fprintf(os.Stderr, "%s\n\n", BANNER_SEP)
 }
 
-// Reset resets the result slice
-func (s *Stdoutput) Reset() {
-	s.CurrentResults = make([]ffuf.Result, 0)
-}
-
-// Cycle moves the CurrentResults to Results and resets the results slice
-func (s *Stdoutput) Cycle() {
-	s.Results = append(s.Results, s.CurrentResults...)
-	s.Reset()
-}
-
-// GetResults returns the result slice
-func (s *Stdoutput) GetCurrentResults() []ffuf.Result {
-	return s.CurrentResults
-}
-
-// SetResults sets the result slice
-func (s *Stdoutput) SetCurrentResults(results []ffuf.Result) {
-	s.CurrentResults = results
-}
-
 func (s *Stdoutput) Progress(status ffuf.Progress) {
 	if s.config.Quiet {
 		// No progress for quiet mode
@@ -202,7 +179,7 @@ func (s *Stdoutput) Error(errstring string) {
 		fmt.Fprintf(os.Stderr, "%s", errstring)
 	} else {
 		if !s.config.Colors {
-			fmt.Fprintf(os.Stderr, "%s[ERR] %s\n", TERMINAL_CLEAR_LINE, errstring)
+			fmt.Fprintf(os.Stderr, "%s[ERR] %s\n", TERMINAL_CLEAR_LINE, errstring)
 		} else {
 			fmt.Fprintf(os.Stderr, "%s[%sERR%s] %s\n", TERMINAL_CLEAR_LINE, ANSI_RED, ANSI_CLEAR, errstring)
 		}
@@ -226,76 +203,31 @@ func (s *Stdoutput) Raw(output string) {
 }
 
 func (s *Stdoutput) writeToAll(filename string, config *ffuf.Config, res []ffuf.Result) error {
-	var err error
-	var BaseFilename string = s.config.OutputFile
-
-	// Go through each type of write, adding
-	// the suffix to each output file.
-
-	s.config.OutputFile = BaseFilename + ".json"
-	err = writeJSON(s.config.OutputFile, s.config, res)
-	if err != nil {
-		s.Error(err.Error())
+	baseFilename := s.config.OutputFile
+	for _, reg := range formatRegistry {
+		outFile := baseFilename + reg.Extension
+		if err := reg.Writer(outFile, config, res); err != nil {
+			s.Error(err.Error())
+		}
 	}
-
-	s.config.OutputFile = BaseFilename + ".ejson"
-	err = writeEJSON(s.config.OutputFile, s.config, res)
-	if err != nil {
-		s.Error(err.Error())
-	}
-
-	s.config.OutputFile = BaseFilename + ".html"
-	err = writeHTML(s.config.OutputFile, s.config, res)
-	if err != nil {
-		s.Error(err.Error())
-	}
-
-	s.config.OutputFile = BaseFilename + ".md"
-	err = writeMarkdown(s.config.OutputFile, s.config, res)
-	if err != nil {
-		s.Error(err.Error())
-	}
-
-	s.config.OutputFile = BaseFilename + ".csv"
-	err = writeCSV(s.config.OutputFile, s.config, res, false)
-	if err != nil {
-		s.Error(err.Error())
-	}
-
-	s.config.OutputFile = BaseFilename + ".ecsv"
-	err = writeCSV(s.config.OutputFile, s.config, res, true)
-	if err != nil {
-		s.Error(err.Error())
-	}
-
 	return nil
-
 }
 
 // SaveFile saves the current results to a file of a given type
 func (s *Stdoutput) SaveFile(filename, format string) error {
-	var err error
 	if s.config.OutputSkipEmptyFile && len(s.Results) == 0 && len(s.CurrentResults) == 0 {
 		s.Info("No results and -or defined, output file not written.")
-		return err
+		return nil
 	}
-	switch format {
-	case "all":
-		err = s.writeToAll(filename, s.config, append(s.Results, s.CurrentResults...))
-	case "json":
-		err = writeJSON(filename, s.config, append(s.Results, s.CurrentResults...))
-	case "ejson":
-		err = writeEJSON(filename, s.config, append(s.Results, s.CurrentResults...))
-	case "html":
-		err = writeHTML(filename, s.config, append(s.Results, s.CurrentResults...))
-	case "md":
-		err = writeMarkdown(filename, s.config, append(s.Results, s.CurrentResults...))
-	case "csv":
-		err = writeCSV(filename, s.config, append(s.Results, s.CurrentResults...), false)
-	case "ecsv":
-		err = writeCSV(filename, s.config, append(s.Results, s.CurrentResults...), true)
+	allResults := append(s.Results, s.CurrentResults...)
+	if format == "all" {
+		return s.writeToAll(filename, s.config, allResults)
 	}
-	return err
+	reg, ok := formatRegistry[format]
+	if !ok {
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+	return reg.Writer(filename, s.config, allResults)
 }
 
 // Finalize gets run after all the ffuf jobs are completed
@@ -464,20 +396,7 @@ func (s *Stdoutput) colorize(status int64) string {
 	if !s.config.Colors {
 		return ""
 	}
-	colorCode := ANSI_CLEAR
-	if status >= 200 && status < 300 {
-		colorCode = ANSI_GREEN
-	}
-	if status >= 300 && status < 400 {
-		colorCode = ANSI_BLUE
-	}
-	if status >= 400 && status < 500 {
-		colorCode = ANSI_YELLOW
-	}
-	if status >= 500 && status < 600 {
-		colorCode = ANSI_RED
-	}
-	return colorCode
+	return StatusColorANSI(status)
 }
 
 func printOption(name []byte, value []byte) {
