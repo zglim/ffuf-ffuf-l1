@@ -17,6 +17,10 @@ type MatcherManager interface {
 	FiltersForDomain(domain string) map[string]FilterProvider
 	CalibratedForDomain(domain string) bool
 	Calibrated() bool
+	SetMatcherMode(mode string)
+	SetFilterMode(mode string)
+	SetAutoCalibrationPerHost(value bool)
+	Match(resp Response) bool
 }
 
 // FilterProvider is a generic interface for both Matchers and Filters

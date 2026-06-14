@@ -317,6 +317,9 @@ func prepareJob(conf *ffuf.Config) (*ffuf.Job, error) {
 func SetupFilters(parseOpts *ffuf.ConfigOptions, conf *ffuf.Config) error {
 	errs := ffuf.NewMultierror()
 	conf.MatcherManager = filter.NewMatcherManager()
+	conf.MatcherManager.SetMatcherMode(conf.MatcherMode)
+	conf.MatcherManager.SetFilterMode(conf.FilterMode)
+	conf.MatcherManager.SetAutoCalibrationPerHost(conf.AutoCalibrationPerHost)
 	// If any other matcher is set, ignore -mc default value
 	matcherSet := false
 	statusSet := false
