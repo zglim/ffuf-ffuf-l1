@@ -29,6 +29,16 @@ func (p *PerDomainFilter) SetCalibrated(value bool) {
 	p.IsCalibrated = value
 }
 
+// AddFilter adds or appends a filter to the PerDomainFilter
+func (p *PerDomainFilter) AddFilter(name string, option string) error {
+	return addOrUpdate(p.Filters, name, option, false)
+}
+
+// GetFilters returns the filters map of the PerDomainFilter
+func (p *PerDomainFilter) GetFilters() map[string]ffuf.FilterProvider {
+	return p.Filters
+}
+
 func NewMatcherManager() ffuf.MatcherManager {
 	return &MatcherManager{
 		IsCalibrated:     false,
@@ -74,51 +84,39 @@ func NewFilterByName(name string, value string) (ffuf.FilterProvider, error) {
 	return nil, fmt.Errorf("Could not create filter with name %s", name)
 }
 
+// addOrUpdate creates a new filter and either sets or appends it in the given map.
+func addOrUpdate(filters map[string]ffuf.FilterProvider, name string, option string, replace bool) error {
+	newf, err := NewFilterByName(name, option)
+	if err != nil {
+		return err
+	}
+	if filters[name] == nil || replace {
+		filters[name] = newf
+	} else {
+		newoption := filters[name].Repr() + "," + option
+		newerf, err := NewFilterByName(name, newoption)
+		if err == nil {
+			filters[name] = newerf
+		}
+	}
+	return nil
+}
+
 //AddFilter adds a new filter to MatcherManager
 func (f *MatcherManager) AddFilter(name string, option string, replace bool) error {
 	f.Mutex.Lock()
 	defer f.Mutex.Unlock()
-	newf, err := NewFilterByName(name, option)
-	if err == nil {
-		// valid filter create or append
-		if f.Filters[name] == nil || replace {
-			f.Filters[name] = newf
-		} else {
-			newoption := f.Filters[name].Repr() + "," + option
-			newerf, err := NewFilterByName(name, newoption)
-			if err == nil {
-				f.Filters[name] = newerf
-			}
-		}
-	}
-	return err
+	return addOrUpdate(f.Filters, name, option, replace)
 }
 
 //AddPerDomainFilter adds a new filter to PerDomainFilter configuration
 func (f *MatcherManager) AddPerDomainFilter(domain string, name string, option string) error {
 	f.Mutex.Lock()
 	defer f.Mutex.Unlock()
-	var pdFilters *PerDomainFilter
-	if filter, ok := f.PerDomainFilters[domain]; ok {
-		pdFilters = filter
-	} else {
-		pdFilters = NewPerDomainFilter(f.Filters)
+	if _, ok := f.PerDomainFilters[domain]; !ok {
+		f.PerDomainFilters[domain] = NewPerDomainFilter(f.Filters)
 	}
-	newf, err := NewFilterByName(name, option)
-	if err == nil {
-		// valid filter create or append
-		if pdFilters.Filters[name] == nil {
-			pdFilters.Filters[name] = newf
-		} else {
-			newoption := pdFilters.Filters[name].Repr() + "," + option
-			newerf, err := NewFilterByName(name, newoption)
-			if err == nil {
-				pdFilters.Filters[name] = newerf
-			}
-		}
-	}
-	f.PerDomainFilters[domain] = pdFilters
-	return err
+	return f.PerDomainFilters[domain].AddFilter(name, option)
 }
 
 //RemoveFilter removes a filter of a given type
@@ -132,20 +130,7 @@ func (f *MatcherManager) RemoveFilter(name string) {
 func (f *MatcherManager) AddMatcher(name string, option string) error {
 	f.Mutex.Lock()
 	defer f.Mutex.Unlock()
-	newf, err := NewFilterByName(name, option)
-	if err == nil {
-		// valid filter create or append
-		if f.Matchers[name] == nil {
-			f.Matchers[name] = newf
-		} else {
-			newoption := f.Matchers[name].Repr() + "," + option
-			newerf, err := NewFilterByName(name, newoption)
-			if err == nil {
-				f.Matchers[name] = newerf
-			}
-		}
-	}
-	return err
+	return addOrUpdate(f.Matchers, name, option, false)
 }
 
 func (f *MatcherManager) GetFilters() map[string]ffuf.FilterProvider {
@@ -160,7 +145,7 @@ func (f *MatcherManager) FiltersForDomain(domain string) map[string]ffuf.FilterP
 	if f.PerDomainFilters[domain] == nil {
 		return f.Filters
 	}
-	return f.PerDomainFilters[domain].Filters
+	return f.PerDomainFilters[domain].GetFilters()
 }
 
 func (f *MatcherManager) CalibratedForDomain(domain string) bool {
@@ -172,4 +157,51 @@ func (f *MatcherManager) CalibratedForDomain(domain string) bool {
 
 func (f *MatcherManager) Calibrated() bool {
 	return f.IsCalibrated
+}
+
+// Match evaluates matchers and filters against a response and returns true if
+// the response should be considered a match.
+func (f *MatcherManager) Match(resp ffuf.Response, matcherMode string, filterMode string, autoCalibrationPerHost bool) bool {
+	matched := false
+	for _, m := range f.Matchers {
+		match, err := m.Filter(&resp)
+		if err != nil {
+			continue
+		}
+		if match {
+			matched = true
+		} else if matcherMode == "and" {
+			return false
+		}
+	}
+	if !matched {
+		return false
+	}
+
+	var filters map[string]ffuf.FilterProvider
+	if autoCalibrationPerHost {
+		filters = f.FiltersForDomain(ffuf.HostURLFromRequest(*resp.Request))
+	} else {
+		filters = f.Filters
+	}
+
+	for _, flt := range filters {
+		fv, err := flt.Filter(&resp)
+		if err != nil {
+			continue
+		}
+		if fv {
+			if filterMode == "or" {
+				return false
+			}
+		} else {
+			if filterMode == "and" {
+				return true
+			}
+		}
+	}
+	if len(filters) > 0 && filterMode == "and" {
+		return false
+	}
+	return true
 }
